@@ -124,8 +124,9 @@ export function createOpenAIRouter(context) {
 
             const { prompt, imagePaths, modelId, modelName } = parseResult.data;
             const reasoning = data.reasoning === true;
+            const sessionId = data.session_id || null;
 
-            logger.info('服务器', `[队列] 请求入队: ${prompt.slice(0, 100)}...`, { id: requestId, images: imagePaths.length });
+            logger.info('服务器', `[队列] 请求入队: ${prompt.slice(0, 100)}...`, { id: requestId, images: imagePaths.length, sessionId });
 
             // 加入队列
             queueManager.addTask({
@@ -137,7 +138,8 @@ export function createOpenAIRouter(context) {
                 modelName,
                 id: requestId,
                 isStreaming,
-                reasoning
+                reasoning,
+                sessionId
             });
 
         } catch (err) {

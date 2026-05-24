@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createOpenAIRouter } from './openai/routes.js';
+import { createCodexRouter } from './codex/routes.js';
 import { createAdminRouter } from './admin/routes.js';
 import { createAuthMiddleware } from '../middlewares/auth.js';
 
@@ -43,6 +44,7 @@ export function createGlobalRouter(context) {
 
     // 创建子路由处理器
     const handleOpenAIRequest = loginMode ? null : createOpenAIRouter(context);
+    const handleCodexRequest = loginMode ? null : createCodexRouter(context);
     const handleAdminRequest = createAdminRouter({ config, queueManager, tempDir, getSafeMode });
 
     /**
@@ -98,29 +100,48 @@ export function createGlobalRouter(context) {
             return;
         }
 
+        // Codex API - /responses (无 /v1 前缀)
+        if (pathname === '/responses' || pathname.startsWith('/responses/')) {
+            if (handleCodexRequest) {
+                await handleCodexRequest(req, res, pathname, parsedUrl);
+            } else {
+                res.writeHead(503);
+                res.end(JSON.stringify({ error: { message: '服务运行在登录模式，Codex API 不可用' } }));
+            }
+            return;
+        }
+
         // OpenAI API (/v1)
         if (pathname.startsWith('/v1')) {
-            // 安全模式下禁用 OpenAI API
+            // 安全模式下禁用 API
             const safeMode = getSafeMode?.();
             if (safeMode?.enabled) {
                 res.writeHead(503, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     error: {
-                        message: `服务运行在安全模式，OpenAI API 不可用。原因: ${safeMode.reason}`,
+                        message: `服务运行在安全模式，API 不可用。原因: ${safeMode.reason}`,
                         type: 'service_unavailable'
                     }
                 }));
                 return;
             }
-            // 登录模式下禁用 OpenAI API
-            if (!handleOpenAIRequest) {
+            // 登录模式下禁用 API
+            if (!handleOpenAIRequest || !handleCodexRequest) {
                 res.writeHead(503, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
-                    error: { message: '服务运行在登录模式，OpenAI API 不可用', type: 'service_unavailable' }
+                    error: { message: '服务运行在登录模式，API 不可用', type: 'service_unavailable' }
                 }));
                 return;
             }
             const v1Path = pathname.slice(3); // 去除 /v1 前缀
+
+            // Codex Responses API
+            if (v1Path === '/responses' || v1Path.startsWith('/responses/')) {
+                await handleCodexRequest(req, res, v1Path, parsedUrl);
+                return;
+            }
+
+            // OpenAI API (其他 /v1/* 路径)
             await handleOpenAIRequest(req, res, v1Path, parsedUrl);
             return;
         }

@@ -5,7 +5,8 @@
 import {
     sleep,
     humanType,
-    safeClick
+    safeClick,
+    random
 } from '../engine/utils.js';
 import {
     normalizePageError,
@@ -17,6 +18,92 @@ import { logger } from '../../utils/logger.js';
 // --- 配置常量 ---
 const TARGET_URL = 'https://chat.deepseek.com/';
 const INPUT_SELECTOR = 'textarea';
+const SESSION_INDICATOR = '/a/chat/s/';
+const HOST_PREFIX = 'https://chat.deepseek.com';
+
+/**
+ * 像真人一样进入指定会话：优先点击侧边栏 -> SPA pushState -> goto 兜底
+ * @param {import('playwright-core').Page} page
+ * @param {string} sessionId
+ * @param {object} meta
+ */
+async function enterSessionLikeHuman(page, sessionId, meta = {}) {
+    const targetPath = `/a/chat/s/${sessionId}`;
+    const currentUrl = page.url();
+    if (currentUrl.includes(targetPath)) {
+        logger.debug('适配器', `已在目标会话 ${sessionId}，无需切换`, meta);
+        return;
+    }
+    const onSameApp = currentUrl.startsWith(HOST_PREFIX);
+
+    if (onSameApp) {
+        const sidebarItem = page.locator(`a[href$="${targetPath}"]`).first();
+        if (await sidebarItem.count().catch(() => 0)) {
+            try {
+                logger.info('适配器', `点击侧边栏会话 ${sessionId}`, meta);
+                await safeClick(page, sidebarItem, { bias: 'random' });
+                await sleep(600, 1200);
+                if (page.url().includes(targetPath)) return;
+            } catch (e) {
+                logger.debug('适配器', `点击侧边栏失败，回退到 SPA pushState: ${e.message}`, meta);
+            }
+        }
+        try {
+            await page.evaluate((path) => {
+                window.history.pushState({}, '', path);
+                window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+            }, targetPath);
+            await sleep(500, 1000);
+            if (page.url().includes(targetPath)) return;
+        } catch (e) {
+            logger.debug('适配器', `pushState 失败，回退到 goto: ${e.message}`, meta);
+        }
+    }
+
+    logger.info('适配器', `首次/跨域加载会话 ${sessionId}`, meta);
+    await gotoWithCheck(page, `${TARGET_URL}a/chat/s/${sessionId}`);
+}
+
+/**
+ * 像真人一样开启新会话：优先点击 New Chat 按钮 -> SPA pushState -> goto 兜底
+ * @param {import('playwright-core').Page} page
+ * @param {object} meta
+ */
+async function startNewChatLikeHuman(page, meta = {}) {
+    const onSameApp = page.url().startsWith(HOST_PREFIX);
+    if (onSameApp) {
+        const candidates = [
+            page.getByRole('button', { name: /new chat|new conversation|开启新对话|新对话/i }),
+            page.locator('a[href="/"]').first(),
+            page.locator('[class*="new-chat" i]').first(),
+        ];
+        for (const loc of candidates) {
+            try {
+                if (await loc.count().catch(() => 0)) {
+                    logger.info('适配器', '点击 New Chat 按钮开启新会话', meta);
+                    await safeClick(page, loc, { bias: 'button' });
+                    await sleep(600, 1200);
+                    if (!/\/a\/chat\/s\//.test(page.url())) return;
+                }
+            } catch (e) {
+                logger.debug('适配器', `New Chat 候选点击失败: ${e.message}`, meta);
+            }
+        }
+        try {
+            await page.evaluate(() => {
+                window.history.pushState({}, '', '/');
+                window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+            });
+            await sleep(500, 1000);
+            if (!/\/a\/chat\/s\//.test(page.url())) return;
+        } catch (e) {
+            logger.debug('适配器', `pushState 回首页失败: ${e.message}`, meta);
+        }
+    }
+
+    logger.info('适配器', '回退到完整加载首页', meta);
+    await gotoWithCheck(page, TARGET_URL);
+}
 
 /**
  * 切换功能按钮状态
@@ -86,40 +173,50 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
     const waitTimeout = config?.backend?.pool?.waitTimeout ?? 120000;
 
     try {
-        logger.info('适配器', '开启新会话...', meta);
-        await gotoWithCheck(page, TARGET_URL);
+        const requestedSessionId = meta?.sessionId || null;
 
-        // 1. 等待输入框加载
-        await waitForInput(page, INPUT_SELECTOR, { click: false });
+        if (requestedSessionId) {
+            logger.info('适配器', `进入指定会话: ${requestedSessionId}`, meta);
+            await enterSessionLikeHuman(page, requestedSessionId, meta);
+            await waitForInput(page, INPUT_SELECTOR, { click: false });
+        } else {
+            logger.info('适配器', '开启新会话...', meta);
+            await startNewChatLikeHuman(page, meta);
+            await waitForInput(page, INPUT_SELECTOR, { click: false });
 
-        // 1.5 切换基础/专业模式 (Instant / Expert)
-        try {
-            const isExpert = modelId ? modelId.endsWith('-expert') : false;
-            const targetType = isExpert ? 'expert' : 'default';
-            const modeBtn = page.locator(`div[data-model-type="${targetType}"]`).first();
-            
-            if (await modeBtn.count() > 0) {
-                logger.info('适配器', `切换 ${isExpert ? 'Expert' : 'Instant'} 模式...`, meta);
-                await safeClick(page, modeBtn, { bias: 'button' });
-                await sleep(300, 500);
+            try {
+                const isExpert = modelId ? modelId.endsWith('-expert') : false;
+                const targetType = isExpert ? 'expert' : 'default';
+                const modeBtn = page.locator(`div[data-model-type="${targetType}"]`).first();
+                if (await modeBtn.count() > 0) {
+                    logger.info('适配器', `切换 ${isExpert ? 'Expert' : 'Instant'} 模式...`, meta);
+                    await safeClick(page, modeBtn, { bias: 'button' });
+                    await sleep(300, 500);
+                }
+            } catch (e) {
+                logger.debug('适配器', `模式切换异常: ${e.message}`, meta);
             }
-        } catch (e) {
-            logger.debug('适配器', `模式切换异常 (部分账号可能无此入口): ${e.message}`, meta);
+
+            const modelConfig = manifest.models.find(m => m.id === modelId);
+            if (modelConfig) {
+                await configureModel(page, modelConfig, meta);
+            }
         }
 
-        // 2. 配置模型功能 (thinking / search)
-        const modelConfig = manifest.models.find(m => m.id === modelId);
-        if (modelConfig) {
-            await configureModel(page, modelConfig, meta);
-        }
-
-        // 3. 输入提示词
         logger.info('适配器', '输入提示词...', meta);
         await safeClick(page, INPUT_SELECTOR, { bias: 'input' });
         await humanType(page, INPUT_SELECTOR, prompt);
-        await sleep(300, 500);
+        // 模拟"读一遍刚打的字"
+        await sleep(900, 2400);
+        // 偶尔加一个字符再删掉（犹豫行为）
+        if (Math.random() < 0.18) {
+            await page.keyboard.type(' ', { delay: random(80, 150) });
+            await sleep(200, 500);
+            await page.keyboard.press('Backspace');
+            await sleep(300, 800);
+        }
 
-        // 4. 先启动 API 监听
+        // 启动 API 监听
         logger.debug('适配器', '启动 API 监听...', meta);
 
         let textContent = '';
@@ -130,7 +227,7 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
 
         const responsePromise = page.waitForResponse(async (response) => {
             const url = response.url();
-            if (!url.includes('chat/completion')) return false;
+            if (!url.includes('/api/v0/chat/completion')) return false;
             if (response.request().method() !== 'POST') return false;
             if (response.status() !== 200) return false;
 
@@ -279,10 +376,18 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
         const trimmedThinking = thinkingContent.trim();
         const result = { text: textContent.trim() };
 
-        // 返回结果（如果有 thinking 则包含 reasoning）
         if (trimmedThinking) {
             logger.info('适配器', `已获取思考过程 (${trimmedThinking.length} 字符)`, meta);
             result.reasoning = trimmedThinking;
+        }
+
+        await sleep(500, 1000);
+        const finalUrl = page.url();
+        logger.debug('适配器', `当前页面 URL: ${finalUrl}`, meta);
+        const sessionMatch = finalUrl.match(/\/a\/chat\/s\/([a-f0-9-]+)/);
+        if (sessionMatch) {
+            result.sessionId = sessionMatch[1];
+            logger.info('适配器', `会话 ID: ${result.sessionId}`, meta);
         }
         return result;
 

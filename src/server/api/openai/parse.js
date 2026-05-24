@@ -125,17 +125,12 @@ export async function parseRequest(data, options) {
 }
 
 /**
- * 解析文本请求 (构建虚拟上下文)
+ * 解析文本请求 — 使用 [SYSTEM]/[HISTORY] 格式，与 deepseek-bridge 一致
  */
 async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStreaming) {
-    let systemPrompt = '';
-    let historyPrompt = '';
-    let currentPrompt = '';
-
     const imagePaths = [];
     let globalImageCount = 0;
 
-    // 辅助函数：处理单条消息内容
     async function processContent(content) {
         let textBuffer = '';
         if (typeof content === 'string') {
@@ -146,19 +141,15 @@ async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStream
                     textBuffer += item.text;
                 } else if (item.type === 'image_url' && item.image_url?.url) {
                     globalImageCount++;
-
-                    // 图片数量限制检查
                     if (imageLimit > 0 && globalImageCount > imageLimit) {
                         textBuffer += `[图片${globalImageCount} (已忽略:超过限制)]`;
                         continue;
                     }
-
                     const url = item.image_url.url;
                     if (url.startsWith('data:image')) {
                         const imagePath = await saveBase64Image(url, tempDir);
                         if (imagePath) {
                             imagePaths.push(imagePath);
-                            // 插入占位符
                             textBuffer += `[图片${globalImageCount}]`;
                         } else {
                             textBuffer += `[图片${globalImageCount} (上传失败)]`;
@@ -172,17 +163,10 @@ async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStream
         return textBuffer;
     }
 
-    // 1. 提取 System Prompt
-    const systemMsg = messages.find(m => m.role === 'system');
-    if (systemMsg) {
-        const content = await processContent(systemMsg.content);
-        if (content) {
-            systemPrompt = `=== 系统指令 (永远置顶) ===\n${content}\n\n`;
-        }
-    }
+    const systemParts = [];
+    const historyParts = [];
+    let latestUser = null;
 
-    // 2. 区分历史和当前消息
-    // 找到最后一条 user 消息的索引
     let lastUserIndex = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === 'user') {
@@ -195,37 +179,48 @@ async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStream
         return parseError(ERROR_CODES.NO_USER_MESSAGES);
     }
 
-    // 3. 构建历史对话 (不包含 system 和 最后一条 user)
-    const historyMessages = messages.filter((m, index) => {
-        return m.role !== 'system' && index < lastUserIndex;
-    });
+    for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        const role = msg.role;
 
-    if (historyMessages.length > 0) {
-        historyPrompt += `=== 历史对话 (滑动窗口或摘要) ===\n`;
-        for (const msg of historyMessages) {
-            const roleName = msg.role === 'user' ? 'User' : 'AI';
+        if (role === 'system') {
             const content = await processContent(msg.content);
-            historyPrompt += `${roleName}: ${content}\n`;
+            if (content) systemParts.push(content);
+            continue;
         }
-        historyPrompt += `\n`;
+
+        if (i === lastUserIndex && role === 'user') {
+            const content = await processContent(msg.content);
+            latestUser = content || '';
+            continue;
+        }
+
+        if (role === 'assistant' || role === 'user') {
+            const content = await processContent(msg.content);
+            if (content) {
+                const tag = role === 'assistant' ? 'ASSISTANT' : 'USER';
+                historyParts.push(`[${tag}]\n${content}\n[/${tag}]`);
+            }
+        }
     }
 
-    // 4. 构建当前输入
-    const lastUserMsg = messages[lastUserIndex];
-    const currentContent = await processContent(lastUserMsg.content);
-
-    // 判断是否需要添加分割符号
-    const hasContext = systemPrompt || historyPrompt;
-    if (hasContext) {
-        // 有上下文，添加分割符
-        currentPrompt = `=== 当前输入 ===\nUser: ${currentContent}`;
-    } else {
-        // 没有上下文，直接使用内容
-        currentPrompt = currentContent;
+    const blocks = [];
+    const systemText = systemParts.filter(Boolean).join('\n\n').trim();
+    if (systemText) {
+        blocks.push('[SYSTEM]\n' + systemText + '\n[/SYSTEM]');
     }
 
-    // 5. 合并最终 Prompt
-    const finalPrompt = systemPrompt + historyPrompt + currentPrompt;
+    if (historyParts.length > 0) {
+        blocks.push('[HISTORY]\n' + historyParts.join('\n\n') + '\n[/HISTORY]');
+    }
+
+    if (latestUser != null) {
+        blocks.push(latestUser);
+    } else if (historyParts.length === 0) {
+        blocks.push('');
+    }
+
+    const finalPrompt = blocks.join('\n\n').trim();
 
     return {
         success: true,

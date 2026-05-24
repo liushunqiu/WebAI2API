@@ -179,7 +179,7 @@ async function getPersistentFingerprint(filePath) {
             operatingSystems: [currentOS],
             devices: ['desktop'],
             locales: ['en-US'],
-            screen: { minWidth: 1280, maxWidth: 1366, minHeight: 720, maxHeight: 768 }
+            screen: { minWidth: 1920, maxWidth: 1920, minHeight: 1080, maxHeight: 1080 }
         };
         const generator = new FingerprintGenerator(generatorOptions);
         fingerprintData = generator.getFingerprint().fingerprint;
@@ -309,7 +309,16 @@ export async function initBrowserBase(config, options = {}) {
             // 告诉网页用户倾向于减少动画 (触发网页自身的优化)
             'ui.prefersReducedMotion': 1,
             // 站点隔离
-            ...(browserConfig.fission === false ? { 'fission.autostart': false } : {})
+            ...(browserConfig.fission === false ? { 'fission.autostart': false } : {}),
+            // 允许网页脚本访问 navigator.clipboard.writeText / readText
+            // 用于 humanType 长文本走真实剪贴板 + Ctrl/Cmd+V，避免 execCommand 输入指纹
+            'dom.events.asyncClipboard.clipboardItem': true,
+            'dom.events.asyncClipboard.readText': true,
+            'dom.events.testing.asyncClipboard': true,
+            'dom.events.asyncClipboard.writeText': true,
+            // 关闭剪贴板访问的用户授权提示（自动化环境不需要 UI 弹窗）
+            'permissions.default.clipboard-read': 1,
+            'permissions.default.clipboard-write': 1
         }
     };
 
@@ -322,6 +331,17 @@ export async function initBrowserBase(config, options = {}) {
     // 启动 Camoufox
     const context = await Camoufox(camoufoxLaunchOptions);
     globalContext = context;
+
+    // 授予剪贴板权限（Chromium 后端有效；Firefox/Camoufox 不支持此 API，已在 firefox_user_prefs 中配置）
+    try {
+        if (typeof context.grantPermissions === 'function') {
+            await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+            logger.debug('浏览器', '已授予剪贴板读写权限');
+        }
+    } catch (e) {
+        // Firefox 的 BrowserContext.grantPermissions 不支持 clipboard 权限，忽略即可
+        logger.debug('浏览器', `grantPermissions 不可用或失败（Firefox 已通过 user_prefs 处理）: ${e.message}`);
+    }
 
     // 构建状态描述
     const statusParts = [];
@@ -349,10 +369,11 @@ export async function initBrowserBase(config, options = {}) {
         page = await context.newPage();
     }
 
-    // 强制刷新视口大小 (使用指纹中的屏幕尺寸)
-    const screenWidth = myFingerprint.screen?.availWidth || 1366;
-    const screenHeight = myFingerprint.screen?.availHeight || 768;
-    await page.setViewportSize({ width: screenWidth, height: screenHeight });
+    // 设置视口尺寸（有头模式需预留 Firefox chrome 空间）
+    const chromeH = headlessMode ? 0 : 120;
+    const viewW = Math.min(myFingerprint.screen?.availWidth || 1366, 1366);
+    const viewH = Math.min(myFingerprint.screen?.availHeight || 768, 768);
+    await page.setViewportSize({ width: viewW, height: Math.max(viewH, 600) });
 
     // CSS 性能优化注入
     const cssInjectConfig = browserConfig.cssInject || {};

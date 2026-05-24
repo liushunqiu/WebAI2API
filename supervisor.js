@@ -302,7 +302,7 @@ function startInXvfb(originalArgs) {
 
     const xvfbArgs = [
         `--server-num=${displayNum}`,
-        '--server-args=-ac -screen 0 1366x768x24',
+        '--server-args=-ac -screen 0 1920x1080x24',
         'env',
         'XVFB_RUNNING=true',
         `DISPLAY=:${displayNum}`,
@@ -357,7 +357,7 @@ async function startVncServer(display) {
         '-forever',
         '-noxdamage',
         '-norc',
-        '-geometry', '1366x768'
+        '-geometry', '1920x1080'
     ], {
         stdio: 'ignore',
         detached: false

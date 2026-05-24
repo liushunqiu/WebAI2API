@@ -437,6 +437,34 @@ export async function safeScroll(page, target, options = {}) {
     }
 }
 
+// QWERTY 相邻按键映射：模拟真人在键盘上误触相邻键的指纹
+const KEYBOARD_NEIGHBORS = {
+    'a': 'sqzw', 's': 'adwxz', 'd': 'sfecr', 'f': 'dgrvc', 'g': 'fhtvb',
+    'h': 'gjybn', 'j': 'hkunm', 'k': 'jlim', 'l': 'kop',
+    'q': 'wa', 'w': 'qeas', 'e': 'wrds', 'r': 'etfd', 't': 'rygf',
+    'y': 'tuhg', 'u': 'yijh', 'i': 'uokj', 'o': 'iplk', 'p': 'ol',
+    'z': 'xas', 'x': 'zcsd', 'c': 'xvdf', 'v': 'cbfg', 'b': 'vngh',
+    'n': 'bmhj', 'm': 'nkj',
+};
+
+/**
+ * 根据原字符返回一个相邻按键作为"误触"字符
+ * @param {string} char - 原字符
+ * @returns {string} 误触字符
+ */
+function getTypoChar(char) {
+    const lower = char.toLowerCase();
+    const neighbors = KEYBOARD_NEIGHBORS[lower];
+    if (neighbors && neighbors.length > 0) {
+        const idx = Math.floor(Math.random() * neighbors.length);
+        const wrong = neighbors[idx];
+        return char === lower ? wrong : wrong.toUpperCase();
+    }
+    // 兜底：英文字母随机一个，非字母用空格
+    const fallback = 'abcdefghijklmnopqrstuvwxyz';
+    return fallback[Math.floor(Math.random() * fallback.length)];
+}
+
 /**
  * 模拟人类键盘输入
  * 支持 CSS selector 和 ElementHandle 两种输入
@@ -491,9 +519,10 @@ export async function humanType(page, target, text, options = {}) {
                 continue;
             }
 
-            // 模拟错字 (5% 概率)
+            // 模拟错字 (5% 概率，使用相邻按键避免固定指纹)
             if (Math.random() < 0.05) {
-                await page.keyboard.type('x', { delay: random(50, 150) });
+                const typoChar = getTypoChar(char);
+                await page.keyboard.type(typoChar, { delay: random(50, 150) });
                 await sleep(100, 300);
                 await page.keyboard.press('Backspace', { delay: random(50, 100) });
             }
@@ -502,7 +531,7 @@ export async function humanType(page, target, text, options = {}) {
             await sleep(30, 100);
         }
     } else {
-        // 长文本: 假装打字 -> 停顿 -> 粘贴
+        // 长文本: 假装打字 -> 停顿 -> 真实剪贴板粘贴
         const fakeCount = Math.floor(random(3, 8));
         const fakeText = text.substring(0, fakeCount);
 
@@ -540,12 +569,48 @@ export async function humanType(page, target, text, options = {}) {
         await page.keyboard.up(modifierKey);
         await sleep(100, 300);
         await page.keyboard.press('Backspace');
-        await sleep(100, 300);
+        await sleep(200, 500);
 
-        // 4. 瞬间粘贴全部文本 (始终使用已获取的 ElementHandle，支持 Shadow DOM)
-        await page.evaluate((content) => {
-            document.execCommand('insertText', false, content);
-        }, text);
+        // 4. 真实剪贴板 + Cmd/Ctrl+V，触发真实的 paste/ClipboardEvent
+        //    优先 navigator.clipboard.writeText（需要 clipboard-write 权限），
+        //    失败则降级到 dispatchEvent 派发 paste 事件（仍然带有 ClipboardEvent 数据）。
+        let clipboardOk = false;
+        try {
+            await page.evaluate(async (content) => {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(content);
+                    return true;
+                }
+                throw new Error('no clipboard api');
+            }, text);
+            clipboardOk = true;
+        } catch (e) {
+            // 权限缺失或浏览器禁用，走 paste 事件降级
+        }
+
+        if (clipboardOk) {
+            await page.keyboard.down(modifierKey);
+            await page.keyboard.press('V');
+            await page.keyboard.up(modifierKey);
+        } else {
+            // 降级方案：派发真实的 paste 事件（比 execCommand insertText 更接近真人）
+            await page.evaluate((content) => {
+                const active = document.activeElement;
+                if (!active) return;
+                const dt = new DataTransfer();
+                dt.setData('text/plain', content);
+                const evt = new ClipboardEvent('paste', {
+                    clipboardData: dt,
+                    bubbles: true,
+                    cancelable: true,
+                });
+                active.dispatchEvent(evt);
+                // 部分编辑器需要 execCommand 兜底
+                if (typeof document.execCommand === 'function') {
+                    document.execCommand('insertText', false, content);
+                }
+            }, text);
+        }
     }
 }
 

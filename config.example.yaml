@@ -81,10 +81,15 @@ backend:
             #   chatgpt_text           (ChatGPT 文本生成)
             #   sora                   (Sora 视频生成)
             #   deepseek_text          (DeepSeek 文本生成)
+            #   deepseek_codex         (DeepSeek Codex — 支持工具调用的文本生成，OpenAI Responses API)
             #   doubao                 (豆包 图片生成)
             #   doubao_text            (豆包 文本生成)
             #   test                   (浏览器检测，仅供调试使用)
             type: lmarena              # 适配器类型
+
+          # DeepSeek Codex worker (用于 OpenAI Responses API / 工具调用)
+          - name: "deepseek_codex"
+            type: deepseek_codex
 
       # ------------------------------------------------
       # 以下为多实例配置示例 (默认注释)
