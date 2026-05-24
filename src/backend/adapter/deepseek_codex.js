@@ -9,7 +9,7 @@
  * 3. 返回 { text, reasoning, toolCalls, sessionId }
  */
 
-import { sleep, humanType, safeClick, random, humanPause } from '../engine/utils.js';
+import { sleep, humanType, safeClick, random, humanPause, startMouseJitter, postResponseReading, sendMessage } from '../engine/utils.js';
 import { normalizePageError, waitForInput, gotoWithCheck } from '../utils/index.js';
 import { logger } from '../../utils/logger.js';
 import { parseDsmlFromText } from '../dsml.js';
@@ -150,6 +150,7 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
   const { page, config } = context;
   const waitTimeout = config?.backend?.pool?.waitTimeout ?? 120000;
 
+  let stopJitter = null;
   try {
     const requestedSessionId = meta?.sessionId || null;
 
@@ -191,6 +192,8 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
     // 输入提示词
     logger.info('适配器', '输入提示词...', meta);
     await safeClick(page, INPUT_SELECTOR, { bias: 'input' });
+    // 输入框拿到焦点后启动鼠标微移：覆盖打字→等响应→收尾整个长尾窗口
+    stopJitter = startMouseJitter(page);
     await humanType(page, INPUT_SELECTOR, prompt);
     // 模拟"读一遍刚打的字" —— 拉宽区间，避免每次相近时长形成节奏指纹
     await sleep(1500, 4500);
@@ -350,7 +353,9 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
     if (Math.random() < 0.08) {
       await sleep(1500, 3500);
     }
-    await page.keyboard.press('Enter');
+    // 35% 概率点 Send 按钮，否则 Enter——分散单一发送行为指纹
+    const sendVia = await sendMessage(page);
+    logger.debug('适配器', `发送方式: ${sendVia}`, meta);
     logger.info('适配器', '等待生成结果...', meta);
 
     try {
@@ -360,6 +365,9 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
       if (pageError) return pageError;
       throw e;
     }
+
+    // 收到回复后做一次「读」行为：滚动 / 停留，避免「响应即退出」的瞬时签名
+    await postResponseReading(page);
 
     if (!textContent || textContent.trim() === '') {
       logger.warn('适配器', '回复内容为空', meta);
@@ -398,6 +406,10 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
     if (pageError) return pageError;
     logger.error('适配器', '生成任务失败', { ...meta, error: err.message });
     return { error: `生成任务失败: ${err.message}` };
+  } finally {
+    if (stopJitter) {
+      try { await stopJitter(); } catch { /* ignore */ }
+    }
   }
 }
 

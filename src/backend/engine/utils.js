@@ -63,6 +63,128 @@ export async function humanPause(min, max, opts = {}) {
 }
 
 /**
+ * 启动后台「鼠标微移」任务：每隔一小段时间把鼠标位置随机偏移几个像素，
+ * 用来制造持续的 mousemove 信号——风控的「人类性」检测核心特征之一。
+ *
+ * 调用方负责在不需要时调用返回的 stopper（建议放在 finally）。
+ * 单次微移幅度很小（默认 ±12 像素以内），不会影响后续 safeClick 的精度，
+ * 而且若页面已关闭会自动静默退出。
+ *
+ * @param {import('playwright-core').Page} page
+ * @param {object} [opts]
+ * @param {number} [opts.minDelay=350] - 两次微移之间最短等待 (ms)
+ * @param {number} [opts.maxDelay=1100] - 两次微移之间最长等待 (ms)
+ * @param {number} [opts.maxDelta=12] - 单轴最大偏移 (px)
+ * @param {number} [opts.startX] - 起始 x（默认随机视口内一点）
+ * @param {number} [opts.startY] - 起始 y
+ * @returns {() => Promise<void>} 停止函数
+ */
+export function startMouseJitter(page, opts = {}) {
+    const { minDelay = 350, maxDelay = 1100, maxDelta = 12 } = opts;
+    let stopped = false;
+
+    // 视口内随机起点；如果之前 click 过，page 上挂的 _mouseX/_mouseY 可作延续
+    let x = opts.startX ?? page._jitterX ?? Math.floor(random(160, 1100));
+    let y = opts.startY ?? page._jitterY ?? Math.floor(random(120, 700));
+
+    const task = (async () => {
+        while (!stopped) {
+            await sleep(minDelay, maxDelay);
+            if (stopped) return;
+            try {
+                if (typeof page.isClosed === 'function' && page.isClosed()) return;
+            } catch { return; }
+
+            const dx = random(-maxDelta, maxDelta);
+            const dy = random(-maxDelta, maxDelta);
+            x = clamp(x + dx, 30, 1400);
+            y = clamp(y + dy, 30, 800);
+            page._jitterX = x;
+            page._jitterY = y;
+
+            try {
+                // steps=2~4 让 playwright 拆成多个 mousemove 事件，更像真实手抖
+                const steps = 2 + Math.floor(Math.random() * 3);
+                await page.mouse.move(x, y, { steps });
+            } catch {
+                // 页面关闭/上下文销毁，静默
+                return;
+            }
+        }
+    })();
+
+    return async () => {
+        stopped = true;
+        try { await task; } catch { /* ignore */ }
+    };
+}
+
+/**
+ * 收到回复后的「读」行为：随机滚动、停留、再滚动。
+ * 用来打破「响应即退出」的瞬时签名——真人收到回复一定会有页面交互。
+ * 单次最长 ~6s，期望值 ~2s。
+ * @param {import('playwright-core').Page} page
+ */
+export async function postResponseReading(page) {
+    try {
+        // 30% 概率上滑（重读上文）
+        if (Math.random() < 0.30) {
+            await page.mouse.wheel(0, -Math.floor(random(180, 700)));
+            await sleep(700, 2100);
+        }
+        // 25% 概率再滑回底部
+        if (Math.random() < 0.25) {
+            await page.mouse.wheel(0, Math.floor(random(120, 500)));
+            await sleep(400, 1300);
+        }
+        // 18% 概率单纯停留看
+        if (Math.random() < 0.18) {
+            await sleep(1200, 3500);
+        }
+    } catch {
+        // 鼠标 wheel 在某些状态下会抛错，忽略
+    }
+}
+
+/**
+ * 35% 概率尝试用「Send」按钮发送，失败/找不到则回退到 Enter。
+ * 真人发送行为分布约 60% Enter / 40% 点按钮，全用 Enter 是机器指纹。
+ * @param {import('playwright-core').Page} page
+ * @param {object} [opts]
+ * @param {number} [opts.buttonProb=0.35] - 使用按钮的概率
+ * @returns {Promise<'button'|'enter'>} 实际采用的发送方式
+ */
+export async function sendMessage(page, opts = {}) {
+    const { buttonProb = 0.35 } = opts;
+    if (Math.random() < buttonProb) {
+        // DeepSeek 没有稳定的 aria-label，多个候选 selector 试一遍
+        const candidates = [
+            'div[role="button"][aria-disabled="false"]:has(svg)',
+            'button[aria-label*="send" i]',
+            'button[aria-label*="发送" i]',
+            'div._7436101[role="button"]', // DeepSeek 当前发送按钮的稳定 class 前缀（按需更新）
+            'div[role="button"]:has(svg):not([aria-disabled="true"])',
+        ];
+        for (const sel of candidates) {
+            try {
+                const loc = page.locator(sel).last();
+                const cnt = await loc.count().catch(() => 0);
+                if (cnt > 0 && await loc.isVisible().catch(() => false)) {
+                    await safeClick(page, loc, { bias: 'button' });
+                    return 'button';
+                }
+            } catch {
+                // 试下一个
+            }
+        }
+        // 都没匹配到，回退
+    }
+    await page.keyboard.press('Enter');
+    return 'enter';
+}
+
+
+/**
  * 根据文件扩展名获取 MIME 类型
  * @param {string} filePath - 文件路径
  * @returns {string} MIME 类型
