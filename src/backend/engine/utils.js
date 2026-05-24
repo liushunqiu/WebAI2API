@@ -522,13 +522,17 @@ export async function humanType(page, target, text, options = {}) {
             // 模拟错字 (5% 概率，使用相邻按键避免固定指纹)
             if (Math.random() < 0.05) {
                 const typoChar = getTypoChar(char);
-                await page.keyboard.type(typoChar, { delay: random(50, 150) });
-                await sleep(100, 300);
-                await page.keyboard.press('Backspace', { delay: random(50, 100) });
+                await page.keyboard.type(typoChar, { delay: random(60, 180) });
+                await sleep(120, 360);
+                await page.keyboard.press('Backspace', { delay: random(60, 140) });
             }
-            await page.keyboard.type(char, { delay: random(30, 100) });
+            await page.keyboard.type(char, { delay: random(40, 180) });
             // 随机击键间隔
-            await sleep(30, 100);
+            await sleep(40, 150);
+            // 8% 概率插入一次「思考停顿」，打破均匀节奏指纹
+            if (Math.random() < 0.08) {
+                await sleep(600, 1800);
+            }
         }
     } else {
         // 长文本: 假装打字 -> 停顿 -> 真实剪贴板粘贴

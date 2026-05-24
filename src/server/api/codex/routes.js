@@ -14,7 +14,9 @@ import { flattenToPrompt, buildToolNameCaseMap, buildToolParamNameMap } from '..
 
 // 会话映射: previous_response_id -> { sessionId, lastUsed }
 const convMap = new Map();
-const CONV_TTL = 30 * 60 * 1000; // 30 分钟
+// 会话复用 TTL：拉长到 4 小时，减少新建会话的频率
+// （DeepSeek 风控对「频繁新建会话」的评分高于「同一会话多轮」）
+const CONV_TTL = 4 * 60 * 60 * 1000;
 
 // 缓存完整的 response 用于 GET /v1/responses/{id}
 const responseCache = new Map();

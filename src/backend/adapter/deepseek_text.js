@@ -206,14 +206,34 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
         logger.info('适配器', '输入提示词...', meta);
         await safeClick(page, INPUT_SELECTOR, { bias: 'input' });
         await humanType(page, INPUT_SELECTOR, prompt);
-        // 模拟"读一遍刚打的字"
-        await sleep(900, 2400);
-        // 偶尔加一个字符再删掉（犹豫行为）
-        if (Math.random() < 0.18) {
-            await page.keyboard.type(' ', { delay: random(80, 150) });
-            await sleep(200, 500);
-            await page.keyboard.press('Backspace');
-            await sleep(300, 800);
+        // 模拟"读一遍刚打的字" —— 拉宽区间，避免每次相近时长形成节奏指纹
+        await sleep(1500, 4500);
+        // 犹豫行为：30% 概率触发，从三种行为里随机选一种
+        const hesitateRoll = Math.random();
+        if (hesitateRoll < 0.30) {
+            const branch = Math.floor(Math.random() * 3);
+            if (branch === 0) {
+                await page.keyboard.type(' ', { delay: random(80, 180) });
+                await sleep(200, 600);
+                await page.keyboard.press('Backspace');
+                await sleep(300, 900);
+            } else if (branch === 1) {
+                const burst = 2 + Math.floor(Math.random() * 2);
+                for (let i = 0; i < burst; i++) {
+                    await page.keyboard.type(' ', { delay: random(70, 160) });
+                }
+                await sleep(400, 1200);
+                for (let i = 0; i < burst; i++) {
+                    await page.keyboard.press('Backspace', { delay: random(50, 130) });
+                }
+                await sleep(300, 900);
+            } else {
+                await sleep(1200, 3200);
+            }
+        }
+        // 12% 概率额外加一次更长的「分心」停顿
+        if (Math.random() < 0.12) {
+            await sleep(3000, 8000);
         }
 
         // 启动 API 监听
