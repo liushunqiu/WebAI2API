@@ -157,8 +157,10 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
       logger.info('适配器', `进入指定会话: ${requestedSessionId}`, meta);
       await enterSessionLikeHuman(page, requestedSessionId, meta);
       await waitForInput(page, INPUT_SELECTOR, { click: false });
-      // 页面进入后先「看一眼」，不要瞬间开始输入
-      await humanPause(800, 2200, { lingerProb: 0.1, lingerMin: 2500, lingerMax: 5500 });
+      // 同会话多轮往返：消除「秒回」签名。Codex 场景下用户看着工具结果继续，
+      // 间隔通常比闲聊短，3-8s 基础 + 10% 概率 12-25s 尾部覆盖偶尔走神。
+      logger.debug('适配器', '同会话续轮：模拟读取与思考时间...', meta);
+      await humanPause(3000, 8000, { lingerProb: 0.1, lingerMin: 12000, lingerMax: 25000 });
     } else {
       logger.info('适配器', '开启新会话...', meta);
       await startNewChatLikeHuman(page, meta);
