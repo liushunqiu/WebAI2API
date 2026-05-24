@@ -385,7 +385,7 @@ export const manifest = {
     { id: 'gpt-5-codex', imagePolicy: 'forbidden', type: 'text' },
     { id: 'gpt-5.1-codex', imagePolicy: 'forbidden', type: 'text' },
     { id: 'gpt-5.2-codex', imagePolicy: 'forbidden', type: 'text' },
-    { id: 'gpt-5.3-codex', imagePolicy: 'forbidden', type: 'text' },
+    { id: 'gpt-5.3-codex', imagePolicy: 'forbidden', type: 'text', thinking: true },
     { id: 'gpt-5.4-codex', imagePolicy: 'forbidden', type: 'text'},
     { id: 'gpt-5.5-codex', imagePolicy: 'forbidden', type: 'text' },
     { id: 'gpt-5.1-codex-mini', imagePolicy: 'forbidden', type: 'text' },

@@ -785,12 +785,22 @@ function flattenContinuation(messages) {
   if (toolOutputs.length > 0) {
     blocks.push('[TOOL RESULTS]\n' + toolOutputs.map(formatToolOutput).join('\n\n') + '\n[/TOOL RESULTS]');
     if (userFollowups.length === 0) {
-      blocks.push(
-        '工具已执行完成，结果见上方 [TOOL RESULTS]。请直接基于结果继续推进任务：\n' +
-        '- 如果还有未完成的步骤，立刻发起下一个 <|DSML|tool_calls> 调用执行下一步。\n' +
-        '- 不要复述工具结果，不要询问用户是否继续。\n' +
-        '- 仅当整个任务已完成或必须由用户补充信息时，才用自然语言回复。'
-      );
+      if (askUserToolBlocked(toolOutputs)) {
+        // 模型尝试调用「向用户提问」类工具，但当前模式下不可用。
+        // 不能再让它"继续调下一个工具"——必须直接用自然语言把问题发回给用户。
+        blocks.push(
+          '上一次尝试调用的「向用户提问」类工具在当前模式下不可用，并且不会变得可用。' +
+          '请不要再尝试调用该工具或任何其他工具，直接用自然语言把你想问的问题作为最终回复输出给用户，' +
+          '并明确列出可选项（如果有），等待用户在下一轮对话中回答。'
+        );
+      } else {
+        blocks.push(
+          '工具已执行完成，结果见上方 [TOOL RESULTS]。请直接基于结果继续推进任务：\n' +
+          '- 如果还有未完成的步骤，立刻发起下一个 <|DSML|tool_calls> 调用执行下一步。\n' +
+          '- 不要复述工具结果，不要询问用户是否继续。\n' +
+          '- 仅当整个任务已完成或必须由用户补充信息时，才用自然语言回复。'
+        );
+      }
     }
   }
 
@@ -799,6 +809,22 @@ function flattenContinuation(messages) {
   }
 
   return blocks.join('\n\n').trim();
+}
+
+// 判断是否「向用户提问」类工具被宿主拒绝。命中后改用引导模型直接自然语言回答的提示。
+const ASK_USER_TOOL_RE = /(^|[_-])(ask|request|prompt)[_-]?user|user[_-]?input|user[_-]?question|clarif|confirm[_-]?with[_-]?user/i;
+const UNAVAILABLE_RE = /\b(unavailable|not\s+available|not\s+allowed|not\s+enabled|disabled|permission\s+denied|forbidden)\b|default\s+mode|不可用|未启用|不允许|被拒绝/i;
+
+function askUserToolBlocked(toolOutputs) {
+  for (const m of toolOutputs) {
+    const name = m && m.name ? String(m.name) : '';
+    const body = m && m.content ? String(m.content) : '';
+    if (!name && !body) continue;
+    if (ASK_USER_TOOL_RE.test(name) && UNAVAILABLE_RE.test(body)) return true;
+    // 工具名未带 user 前缀时，宿主错误文本里通常会显式出现 request_user_input 之类
+    if (UNAVAILABLE_RE.test(body) && ASK_USER_TOOL_RE.test(body)) return true;
+  }
+  return false;
 }
 
 function formatHistoryMessage(msg) {
