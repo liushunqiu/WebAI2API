@@ -6,7 +6,8 @@ import {
     sleep,
     humanType,
     safeClick,
-    random
+    random,
+    humanPause
 } from '../engine/utils.js';
 import {
     normalizePageError,
@@ -128,7 +129,7 @@ async function toggleButton(page, buttonName, targetState, meta = {}) {
         if (isSelected !== targetState) {
             logger.info('适配器', `切换 ${buttonName}: ${isSelected} -> ${targetState}`, meta);
             await safeClick(page, btn, { bias: 'button' });
-            await sleep(300, 500);
+            await humanPause(500, 1400);
             return true;
         } else {
             logger.debug('适配器', `${buttonName} 已是目标状态: ${targetState}`, meta);
@@ -150,13 +151,19 @@ async function configureModel(page, modelConfig, meta = {}) {
     const thinking = modelConfig?.thinking || false;
     const search = modelConfig?.search || false;
 
-    // 切换 DeepThink 状态
-    await toggleButton(page, 'DeepThink', thinking, meta);
-    await sleep(200, 400);
-
-    // 切换 Search 状态
-    await toggleButton(page, 'Search', search, meta);
-    await sleep(200, 400);
+    // 50% 概率打乱切换顺序，避免「永远 DeepThink→Search」的固定指纹
+    const reversed = Math.random() < 0.5;
+    if (reversed) {
+        await toggleButton(page, 'Search', search, meta);
+        await sleep(450, 1200);
+        await toggleButton(page, 'DeepThink', thinking, meta);
+        await sleep(450, 1200);
+    } else {
+        await toggleButton(page, 'DeepThink', thinking, meta);
+        await sleep(450, 1200);
+        await toggleButton(page, 'Search', search, meta);
+        await sleep(450, 1200);
+    }
 }
 
 /**
@@ -179,10 +186,13 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
             logger.info('适配器', `进入指定会话: ${requestedSessionId}`, meta);
             await enterSessionLikeHuman(page, requestedSessionId, meta);
             await waitForInput(page, INPUT_SELECTOR, { click: false });
+            // 页面进入后先「看一眼」，不要瞬间开始输入
+            await humanPause(800, 2200, { lingerProb: 0.1, lingerMin: 2500, lingerMax: 5500 });
         } else {
             logger.info('适配器', '开启新会话...', meta);
             await startNewChatLikeHuman(page, meta);
             await waitForInput(page, INPUT_SELECTOR, { click: false });
+            await humanPause(800, 2200, { lingerProb: 0.1, lingerMin: 2500, lingerMax: 5500 });
 
             try {
                 const isExpert = modelId ? modelId.endsWith('-expert') : false;
@@ -191,7 +201,7 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
                 if (await modeBtn.count() > 0) {
                     logger.info('适配器', `切换 ${isExpert ? 'Expert' : 'Instant'} 模式...`, meta);
                     await safeClick(page, modeBtn, { bias: 'button' });
-                    await sleep(300, 500);
+                    await humanPause(600, 1500);
                 }
             } catch (e) {
                 logger.debug('适配器', `模式切换异常: ${e.message}`, meta);
@@ -372,6 +382,11 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
 
         // 5. 发送提示词
         logger.debug('适配器', '发送提示词...', meta);
+        // 按下 Enter 前留出一段「最后决定」时间，并有小概率二次犹豫
+        await sleep(200, 700);
+        if (Math.random() < 0.08) {
+            await sleep(1500, 3500);
+        }
         await page.keyboard.press('Enter');
 
         logger.info('适配器', '等待生成结果...', meta);
@@ -401,7 +416,7 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
             result.reasoning = trimmedThinking;
         }
 
-        await sleep(500, 1000);
+        await humanPause(1000, 2800, { lingerProb: 0.15, lingerMin: 2500, lingerMax: 5000 });
         const finalUrl = page.url();
         logger.debug('适配器', `当前页面 URL: ${finalUrl}`, meta);
         const sessionMatch = finalUrl.match(/\/a\/chat\/s\/([a-f0-9-]+)/);

@@ -45,6 +45,24 @@ export function sleep(min, max) {
 }
 
 /**
+ * 带「偶发长停顿」的拟人化休眠：基础 sleep 之后以一定概率再追加一段较长的 linger，
+ * 用来打破均匀节奏指纹（风控对方差为零的节拍最敏感）。
+ * @param {number} min - 基础停顿最小毫秒
+ * @param {number} max - 基础停顿最大毫秒
+ * @param {object} [opts]
+ * @param {number} [opts.lingerProb=0.15] - 触发长停顿的概率
+ * @param {number} [opts.lingerMin=2000]   - 长停顿最小毫秒
+ * @param {number} [opts.lingerMax=4500]   - 长停顿最大毫秒
+ */
+export async function humanPause(min, max, opts = {}) {
+    const { lingerProb = 0.15, lingerMin = 2000, lingerMax = 4500 } = opts;
+    await sleep(min, max);
+    if (Math.random() < lingerProb) {
+        await sleep(lingerMin, lingerMax);
+    }
+}
+
+/**
  * 根据文件扩展名获取 MIME 类型
  * @param {string} filePath - 文件路径
  * @returns {string} MIME 类型
